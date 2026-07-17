@@ -122,12 +122,14 @@ def detect_bullish_divergence(
                 {
                     "type": "bullish_divergence",
                     "first_low": {
-                        "date": str(pd.Timestamp(df.index[idx1]).date()),
+                        "bar_index": int(idx1),
+                        "date": str(df.index[idx1]),
                         "price": round(price1, 2),
                         "macd": round(macd1, 4),
                     },
                     "second_low": {
-                        "date": str(pd.Timestamp(df.index[idx2]).date()),
+                        "bar_index": int(idx2),
+                        "date": str(df.index[idx2]),
                         "price": round(price2, 2),
                         "macd": round(macd2, 4),
                     },
@@ -137,19 +139,60 @@ def detect_bullish_divergence(
     return divergences
 
 
-def detect_histogram_breakout(macd_df: pd.DataFrame, lookback_bars: int = 3) -> list[dict]:
-    """Flag bars where the MACD histogram crosses from <= 0 to > 0 (bullish
-    momentum shift). Returns all crossings found; caller decides what counts
-    as "recent" using lookback_bars against len(df)."""
+def find_trigger_level(macd_df: pd.DataFrame, idx1: int, idx2: int) -> dict | None:
+    """Strategy step 3: between the two divergence troughs (idx1 = first low,
+    idx2 = second/most recent low), find the bar with the highest MACD
+    histogram value and use its height as the trigger line. Returns None if
+    there are no bars strictly between the two troughs."""
+    if idx2 - idx1 < 2:
+        return None
+    segment = macd_df["histogram"].iloc[idx1 + 1 : idx2]
+    if segment.empty:
+        return None
+    peak_pos = int(segment.values.argmax())
+    peak_idx = idx1 + 1 + peak_pos
+    return {
+        "bar_index": peak_idx,
+        "date": str(macd_df.index[peak_idx]),
+        "level": round(float(segment.iloc[peak_pos]), 4),
+    }
+
+
+def detect_trigger_breakout(macd_df: pd.DataFrame, trigger: dict, after_idx: int) -> dict | None:
+    """Strategy step 4: scan bars after `after_idx` (the second/most recent
+    divergence trough) for the first histogram bar that closes above the
+    trigger line's level. Returns the breakout bar, or None if it hasn't
+    happened yet."""
     hist = macd_df["histogram"]
-    breakouts = []
-    for i in range(1, len(hist)):
-        if hist.iloc[i - 1] <= 0 and hist.iloc[i] > 0:
-            breakouts.append(
-                {
-                    "date": str(pd.Timestamp(macd_df.index[i]).date()),
-                    "histogram": round(float(hist.iloc[i]), 4),
-                    "bars_from_end": int(len(hist) - 1 - i),
-                }
-            )
-    return breakouts
+    level = trigger["level"]
+    for i in range(after_idx + 1, len(hist)):
+        if hist.iloc[i] > level:
+            return {
+                "bar_index": i,
+                "date": str(macd_df.index[i]),
+                "histogram": round(float(hist.iloc[i]), 4),
+                "trigger_level": level,
+                "bars_from_end": int(len(hist) - 1 - i),
+            }
+    return None
+
+
+def build_divergence_signals(macd_df: pd.DataFrame, divergences: list[dict]) -> list[dict]:
+    """Combine steps 2-4: for each detected bullish divergence, mark the
+    trigger line (highest histogram point between the two troughs) and check
+    whether the histogram has since broken above it."""
+    signals = []
+    for div in divergences:
+        idx1 = div["first_low"]["bar_index"]
+        idx2 = div["second_low"]["bar_index"]
+        trigger = find_trigger_level(macd_df, idx1, idx2)
+        breakout = detect_trigger_breakout(macd_df, trigger, idx2) if trigger else None
+        signals.append(
+            {
+                "divergence": div,
+                "trigger_line": trigger,
+                "breakout": breakout,
+                "triggered": breakout is not None,
+            }
+        )
+    return signals
