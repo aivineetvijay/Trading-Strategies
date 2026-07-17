@@ -57,7 +57,7 @@ class MACDDivergenceStrategy:
             self._provider = get_data_provider()
         return self._provider
 
-    def analyze_ticker(self, ticker: str, lookback: str = "2mo") -> dict:
+    def analyze_ticker(self, ticker: str, lookback: str = "2mo", include_series: bool = False) -> dict:
         # Fetch the lower (1H) timeframe once; the higher (4H) timeframe is
         # derived from it locally by resampling, so this doesn't cost a
         # second API call (and keeps both timeframes built from the same
@@ -107,7 +107,7 @@ class MACDDivergenceStrategy:
             summary_bits.append("bullish divergence detected, awaiting histogram break above trigger line")
         summary = "; ".join(summary_bits) if summary_bits else "no active setup"
 
-        return {
+        result = {
             "ticker": ticker,
             "higher_interval": self.higher_interval,
             "lower_interval": self.lower_interval,
@@ -121,6 +121,22 @@ class MACDDivergenceStrategy:
             "summary": summary,
             "bars_analyzed": n_bars,
         }
+
+        if include_series:
+            # Raw 1H OHLC + MACD series for charting. Not included by default
+            # (MCP tool responses stay compact); the web UI opts in.
+            result["series"] = {
+                "dates": [str(d) for d in lower_df.index],
+                "open": [round(float(v), 4) for v in lower_df["open"]],
+                "high": [round(float(v), 4) for v in lower_df["high"]],
+                "low": [round(float(v), 4) for v in lower_df["low"]],
+                "close": [round(float(v), 4) for v in lower_df["close"]],
+                "macd": [round(float(v), 4) for v in macd_df["macd"]],
+                "signal_line": [round(float(v), 4) for v in macd_df["signal"]],
+                "histogram": [round(float(v), 4) for v in macd_df["histogram"]],
+            }
+
+        return result
 
     def scan_watchlist(self, tickers: list[str] | None = None, lookback: str = "2mo") -> dict:
         tickers = tickers or DEFAULT_WATCHLIST
