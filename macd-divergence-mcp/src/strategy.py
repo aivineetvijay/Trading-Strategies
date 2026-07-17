@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from .data_provider import DataProvider, get_data_provider
+from .data_provider import DataProvider, get_data_provider, resample_ohlc
 from .indicators import (
     build_divergence_signals,
     compute_macd,
@@ -58,14 +58,19 @@ class MACDDivergenceStrategy:
         return self._provider
 
     def analyze_ticker(self, ticker: str, lookback: str = "2mo") -> dict:
+        # Fetch the lower (1H) timeframe once; the higher (4H) timeframe is
+        # derived from it locally by resampling, so this doesn't cost a
+        # second API call (and keeps both timeframes built from the same
+        # underlying bars).
+        lower_df = self.provider.get_ohlc(ticker, interval=self.lower_interval, lookback=lookback)
+        higher_df = resample_ohlc(lower_df, self.higher_interval)
+
         # Step 1: support/resistance on the higher (4H) timeframe.
-        higher_df = self.provider.get_ohlc(ticker, interval=self.higher_interval, lookback=lookback)
         levels = get_support_resistance(
             higher_df, order=self.sr_order, tolerance_pct=self.sr_tolerance_pct, min_touches=self.sr_min_touches
         )
 
         # Step 2: bullish divergence on the lower (1H) timeframe.
-        lower_df = self.provider.get_ohlc(ticker, interval=self.lower_interval, lookback=lookback)
         macd_df = compute_macd(lower_df["close"])
         divergences = detect_bullish_divergence(
             lower_df, macd_df, order=self.div_order, min_gap=self.div_min_gap, max_gap=self.div_max_gap
